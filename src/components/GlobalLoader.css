@@ -1,0 +1,79 @@
+/* Global Loader Styles */
+:root {
+  --glow-color: #FFD700;
+  --shape-bg: rgba(255, 255, 255, 0.05);
+  --path-len: 5000;
+}
+
+.global-loader-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(10, 10, 10, 0.95);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(10px);
+}
+
+.global-loader-container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.global-loader-container svg {
+  width: 100%;
+  height: auto;
+}
+
+.global-loader-message {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  font-weight: 400;
+  text-align: center;
+  margin: 0;
+  letter-spacing: 0.5px;
+}
+
+.shape-base {
+  fill: var(--shape-bg);
+  stroke: rgba(255, 255, 255, 0.1);
+  stroke-width: 1px;
+  animation: pulse 4s ease-in-out infinite;
+}
+
+.light-trace {
+  fill: none;
+  stroke: var(--glow-color);
+  stroke-width: 5px;
+  stroke-linecap: round;
+  stroke-dasharray: calc(var(--path-len) * 0.2) calc(var(--path-len) * 0.8);
+  stroke-dashoffset: 0;
+  animation: flow 3s linear infinite;
+  filter: drop-shadow(0 0 8px var(--glow-color));
+}
+
+@keyframes flow {
+  from {
+    stroke-dashoffset: var(--path-len);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    fill: rgba(255, 255, 255, 0.03);
+  }
+  50% {
+    fill: rgba(255, 255, 255, 0.08);
+  }
+}
