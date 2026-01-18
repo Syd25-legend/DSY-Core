@@ -8,6 +8,7 @@ import GlobalLoader from './components/globalloader';
 import LivePreview from './components/LivePreview';
 import ChatHistoryDrawer from './components/ChatHistoryDrawer';
 import PreviewPage from './components/PreviewPage';
+import CodeChatbot from './components/CodeChatbot';
 import { Map, Box } from 'lucide-react';
 import './index.css';
 
@@ -524,6 +525,12 @@ function AppContent() {
                         <span className="material-icons-round text-xs mr-1.5">code</span>
                         Code
                       </button>
+                      
+                      {/* Separator */}
+                      <div className="w-px h-4 bg-white/10 mx-1" />
+                      
+                      {/* AI Chat Button */}
+                      <CodeChatbot />
                     </div>
                   </div>
 

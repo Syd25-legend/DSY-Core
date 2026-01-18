@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef } f
 import { openDB } from 'idb';
 import * as sambaNovaService from '../services/sambaNovaService';
 import * as geminiService from '../services/geminiService';
+import * as chatbotService from '../services/chatbotService';
 
 const CodeContext = createContext(null);
 
@@ -116,6 +117,11 @@ export function CodeProvider({ children }) {
   const [chatHistory, setChatHistory] = useState([]);
   const [currentChatId, setCurrentChatId] = useState(null);
   const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState(false);
+
+  // Chatbot (AI Code Analyzer) state
+  const [chatbotMessages, setChatbotMessages] = useState([]);
+  const [chatbotLoading, setChatbotLoading] = useState(false);
+  const [pendingCodeChanges, setPendingCodeChanges] = useState(null);
 
   // BroadcastChannel ref for cross-tab communication
   const broadcastChannelRef = useRef(null);
@@ -334,9 +340,11 @@ export function CodeProvider({ children }) {
     );
   }, []);
 
-  // Add new file
+  // Add new file - uses counter to ensure unique IDs even when called synchronously
+  const fileIdCounter = useRef(0);
   const addNewFile = useCallback((parentPath, fileName, content = '') => {
-    const id = `file-${Date.now()}`;
+    fileIdCounter.current += 1;
+    const id = `file-${Date.now()}-${fileIdCounter.current}`;
     const extension = fileName.split('.').pop();
     const languageMap = {
       'ts': 'typescript',
@@ -581,29 +589,39 @@ export function CodeProvider({ children }) {
         const existingHtmlFile = project.files.find(f => f.name === 'index.html');
         const existingCssFile = project.files.find(f => f.name === 'styles.css');
 
+        let htmlFileId = existingHtmlFile?.id || null;
+        let cssFileId = existingCssFile?.id || null;
+
         if (result.html) {
           if (existingHtmlFile) {
             updateFileContent(existingHtmlFile.id, result.html);
-            // Make sure the file is open in a tab
-            if (!openFiles.includes(existingHtmlFile.id)) {
-              openFile(existingHtmlFile.id);
-            }
           } else {
-            const htmlFileId = addNewFile('/', 'index.html', result.html);
-            openFile(htmlFileId);
+            htmlFileId = addNewFile('/', 'index.html', result.html);
           }
         }
         if (result.css) {
           if (existingCssFile) {
             updateFileContent(existingCssFile.id, result.css);
-            // Make sure the file is open in a tab
-            if (!openFiles.includes(existingCssFile.id)) {
-              openFile(existingCssFile.id);
-            }
           } else {
-            const cssFileId = addNewFile('/', 'styles.css', result.css);
-            openFile(cssFileId);
+            cssFileId = addNewFile('/', 'styles.css', result.css);
           }
+        }
+
+        // Open BOTH files as separate tabs in a single state update
+        setOpenFiles(prev => {
+          const newOpenFiles = [...prev];
+          if (htmlFileId && !newOpenFiles.includes(htmlFileId)) {
+            newOpenFiles.push(htmlFileId);
+          }
+          if (cssFileId && !newOpenFiles.includes(cssFileId)) {
+            newOpenFiles.push(cssFileId);
+          }
+          return newOpenFiles;
+        });
+        
+        // Set HTML as the active file (CSS tab will also be open but not focused)
+        if (htmlFileId) {
+          setActiveFileId(htmlFileId);
         }
 
         // Auto-switch to Canvas view
@@ -787,6 +805,134 @@ export function CodeProvider({ children }) {
     setIsHistoryDrawerOpen(prev => !prev);
   }, []);
 
+  // ============================================================================
+  // CHATBOT (AI Code Analyzer) FUNCTIONS
+  // ============================================================================
+
+  // Get current project files for chatbot context
+  const getChatbotFiles = useCallback(() => {
+    const htmlFile = project.files.find(f => f.name === 'index.html' || f.name?.endsWith('.html'));
+    const cssFile = project.files.find(f => f.name === 'styles.css' || f.name?.endsWith('.css'));
+    return {
+      html: htmlFile?.content || '',
+      css: cssFile?.content || ''
+    };
+  }, [project.files]);
+
+  // Send message to chatbot
+  const sendChatbotMessage = useCallback(async (message) => {
+    if (!message.trim()) return;
+
+    // Add user message to history
+    const userMessage = { role: 'user', content: message };
+    setChatbotMessages(prev => [...prev, userMessage]);
+    setChatbotLoading(true);
+    setPendingCodeChanges(null);
+
+    try {
+      const files = getChatbotFiles();
+      const result = await chatbotService.sendChatMessage(
+        message,
+        files,
+        chatbotMessages
+      );
+
+      if (result.success) {
+        // Add AI response to history
+        const aiMessage = { role: 'assistant', content: result.message };
+        setChatbotMessages(prev => [...prev, aiMessage]);
+
+        // Store pending code changes if AI suggested modifications
+        if (result.hasCodeChanges) {
+          setPendingCodeChanges({
+            html: result.modifiedHtml,
+            css: result.modifiedCss
+          });
+        }
+      } else {
+        // Add error message
+        const errorMessage = { role: 'assistant', content: `❌ Error: ${result.error}` };
+        setChatbotMessages(prev => [...prev, errorMessage]);
+      }
+    } catch (error) {
+      const errorMessage = { role: 'assistant', content: `❌ Error: ${error.message}` };
+      setChatbotMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setChatbotLoading(false);
+    }
+  }, [chatbotMessages, getChatbotFiles]);
+
+  // Apply pending code changes from chatbot
+  const applyChatbotCodeChanges = useCallback(() => {
+    if (!pendingCodeChanges) return;
+
+    const existingHtmlFile = project.files.find(f => f.name === 'index.html');
+    const existingCssFile = project.files.find(f => f.name === 'styles.css');
+    
+    let htmlFileId = null;
+    let cssFileId = null;
+
+    // Apply HTML changes
+    if (pendingCodeChanges.html) {
+      if (existingHtmlFile) {
+        updateFileContent(existingHtmlFile.id, pendingCodeChanges.html);
+        htmlFileId = existingHtmlFile.id;
+      } else {
+        htmlFileId = addNewFile('/', 'index.html', pendingCodeChanges.html);
+      }
+    }
+
+    // Apply CSS changes
+    if (pendingCodeChanges.css) {
+      if (existingCssFile) {
+        updateFileContent(existingCssFile.id, pendingCodeChanges.css);
+        cssFileId = existingCssFile.id;
+      } else {
+        cssFileId = addNewFile('/', 'styles.css', pendingCodeChanges.css);
+      }
+    }
+
+    // Open both files as separate tabs
+    if (htmlFileId) {
+      setOpenFiles(prev => prev.includes(htmlFileId) ? prev : [...prev, htmlFileId]);
+    }
+    if (cssFileId) {
+      setOpenFiles(prev => prev.includes(cssFileId) ? prev : [...prev, cssFileId]);
+    }
+    
+    // Set HTML as active file (or CSS if only CSS was modified)
+    if (htmlFileId) {
+      setActiveFileId(htmlFileId);
+    } else if (cssFileId) {
+      setActiveFileId(cssFileId);
+    }
+
+    // Clear pending changes
+    setPendingCodeChanges(null);
+
+    // Update live preview
+    if (pendingCodeChanges.html || pendingCodeChanges.css) {
+      const htmlFile = project.files.find(f => f.name === 'index.html');
+      const cssFile = project.files.find(f => f.name === 'styles.css');
+      const compiled = geminiService.compileLivePreview(
+        pendingCodeChanges.html || htmlFile?.content || '',
+        pendingCodeChanges.css || cssFile?.content || ''
+      );
+      setLivePreviewCode(compiled);
+    }
+    
+    // Switch to code tab to show the changes
+    setActiveTab('code');
+
+    console.log('✅ Chatbot code changes applied');
+  }, [pendingCodeChanges, project.files, updateFileContent, addNewFile]);
+
+  // Clear chatbot history
+  const clearChatbotHistory = useCallback(() => {
+    setChatbotMessages([]);
+    setPendingCodeChanges(null);
+  }, []);
+
   const value = {
     // State
     code,
@@ -854,6 +1000,14 @@ export function CodeProvider({ children }) {
     deleteChat,
     startNewChat,
     toggleHistoryDrawer,
+
+    // Chatbot (AI Code Analyzer) state and actions
+    chatbotMessages,
+    chatbotLoading,
+    pendingCodeChanges,
+    sendChatbotMessage,
+    applyChatbotCodeChanges,
+    clearChatbotHistory,
 
     // New tab preview support
     broadcastChannelRef,

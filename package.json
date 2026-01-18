@@ -13,6 +13,7 @@
     "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/vite": "^4.1.18",
     "file-saver": "^2.0.5",
+    "groq-sdk": "^0.37.0",
     "idb": "^8.0.3",
     "jszip": "^3.10.1",
     "lucide-react": "^0.562.0",
