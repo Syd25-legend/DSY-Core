@@ -116,6 +116,8 @@ export function CodeProvider({ children }) {
   const [framework, setFramework] = useState('html'); // 'html' or 'react'
   const [streamingContent, setStreamingContent] = useState('');
   const [projectTitle, setProjectTitle] = useState(''); // AI-generated project title
+  const [lastSyncTime, setLastSyncTime] = useState(null); // Track last auto-sync
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(true); // Auto-sync toggle
 
   // Chat history state
   const [chatHistory, setChatHistory] = useState([]);
@@ -923,6 +925,94 @@ export function CodeProvider({ children }) {
     }
   }, [db]);
 
+  // Auto-sync to cloud every 2 minutes
+  useEffect(() => {
+    if (!autoSyncEnabled || !sessionId || !db) return;
+    
+    const SYNC_INTERVAL = 2 * 60 * 1000; // 2 minutes
+    
+    const syncInterval = setInterval(async () => {
+      // Only sync if there's meaningful data
+      if (project?.files?.length > 0 || assets?.length > 0 || chatHistory?.length > 0) {
+        console.log('⏰ Auto-sync triggered...');
+        try {
+          const sessionData = {
+            project,
+            assets,
+            chatHistory,
+            lastActive: new Date().toISOString(),
+          };
+          await sessionService.syncSessionToCloud(sessionId, sessionData);
+          setLastSyncTime(new Date());
+          console.log('✅ Auto-sync complete at', new Date().toLocaleTimeString());
+        } catch (error) {
+          console.warn('⚠️ Auto-sync failed:', error.message);
+        }
+      }
+    }, SYNC_INTERVAL);
+    
+    return () => clearInterval(syncInterval);
+  }, [autoSyncEnabled, sessionId, db, project, assets, chatHistory]);
+
+  // End Session - Clear local data for lab privacy
+  const endSession = useCallback(async () => {
+    if (!db) return { success: false, error: 'Database not initialized' };
+    
+    try {
+      // First sync current session to cloud (save user's work)
+      if (project?.files?.length > 0 || assets?.length > 0) {
+        console.log('💾 Syncing before ending session...');
+        const sessionData = {
+          project,
+          assets,
+          chatHistory,
+          lastActive: new Date().toISOString(),
+        };
+        await sessionService.syncSessionToCloud(sessionId, sessionData);
+      }
+      
+      // Clear all IndexedDB stores
+      const stores = ['assets', 'projects', 'chats', 'appState'];
+      const tx = db.transaction(stores, 'readwrite');
+      
+      await Promise.all([
+        tx.objectStore('assets').clear(),
+        tx.objectStore('projects').clear(),
+        tx.objectStore('chats').clear(),
+        tx.objectStore('appState').clear()
+      ]);
+      
+      await tx.done;
+      
+      // Generate a new fresh session ID for the next user
+      const newId = generateDSYId();
+      await db.put('appState', { key: 'sessionId', value: newId });
+      
+      // Reset all state to defaults
+      setSessionId(newId);
+      setProject(DEFAULT_PROJECT);
+      setAssets([]);
+      setChatHistory([]);
+      setOpenFiles([]);
+      setActiveFileId(null);
+      setCode('');
+      setPrompt('');
+      setOptimizedPrompt('');
+      setGeneratedCode({ html: '', css: '' });
+      setLivePreviewCode('');
+      setProjectTitle('');
+      setCurrentChatId(null);
+      setChatbotMessages([]);
+      
+      console.log('🔒 Session ended. New session:', newId);
+      return { success: true, newSessionId: newId };
+      
+    } catch (error) {
+      console.error('Failed to end session:', error);
+      return { success: false, error: error.message };
+    }
+  }, [db, sessionId, project, assets, chatHistory]);
+
 
 
   // Start a new chat (clear current state)
@@ -1139,6 +1229,8 @@ export function CodeProvider({ children }) {
     copySessionId,
     syncToCloud,
     switchSession,
+    endSession, // Lab privacy - clear local data
+    lastSyncTime, // Track last auto-sync time
 
     // Chat history state and actions
     chatHistory,

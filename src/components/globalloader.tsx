@@ -11,7 +11,7 @@ interface GlobalLoaderProps {
 }
 
 const GlobalLoader: React.FC<GlobalLoaderProps> = ({
-  size = 80,
+  size = 48, // 40% smaller than original 80px
   fullScreen = false,
   message,
 }) => {

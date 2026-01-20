@@ -10,7 +10,8 @@ import ChatHistoryDrawer from './components/ChatHistoryDrawer';
 import PreviewPage from './components/PreviewPage';
 import CodeChatbot from './components/CodeChatbot';
 import LoginModal from './components/LoginModal';
-import { Map, Box, LogIn, CloudUpload, Loader2 } from 'lucide-react';
+import { ToastProvider, useToast } from './components/ToastProvider';
+import { Map, Box, LogIn, CloudUpload, Loader2, LogOut } from 'lucide-react';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { generateProjectTitle, sanitizeFilename } from './utils/titleGenerator';
@@ -45,17 +46,21 @@ function AppContent() {
     toggleHistoryDrawer,
     // Session Sync
     syncToCloud,
+    endSession,
     // Project files
     project,
     // AI-generated project title
     projectTitle,
   } = useCode();
 
+  const { toast, confirm } = useToast();
+
   const [copied, setCopied] = useState(false);
   const [linkModalOpen, setLinkModalOpen] = useState(false);
   const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [externalLink, setExternalLink] = useState('');
+  const [isEndingSession, setIsEndingSession] = useState(false);
   const [examplePromptsOpen, setExamplePromptsOpen] = useState(false);
   const [isHoveringUploadZone, setIsHoveringUploadZone] = useState(false);
   const fileInputRef = useRef(null);
@@ -91,9 +96,32 @@ function AppContent() {
     setIsSyncing(false);
     
     if (result.success) {
-      alert('Session synced to cloud successfully!');
+      toast.success('Session synced to cloud successfully!');
     } else {
-      alert('Failed to sync: ' + result.error);
+      toast.error('Failed to sync: ' + result.error);
+    }
+  };
+
+  // Handle End Session (for lab privacy)
+  const handleEndSession = async () => {
+    const confirmed = await confirm({
+      title: 'End Session?',
+      message: 'Your work will be synced to the cloud first.\nThe next user will see a fresh empty session.\n\nRemember your Session ID to access your work later!',
+      confirmText: 'End Session',
+      cancelText: 'Cancel',
+      type: 'warning'
+    });
+    
+    if (!confirmed) return;
+    
+    setIsEndingSession(true);
+    const result = await endSession();
+    setIsEndingSession(false);
+    
+    if (result.success) {
+      toast.success(`Session ended! New session: ${result.newSessionId}`);
+    } else {
+      toast.error('Failed to end session: ' + result.error);
     }
   };
 
@@ -103,12 +131,12 @@ function AppContent() {
     
     for (const file of files) {
       if (!allowedTypes.includes(file.type)) {
-        alert(`File type not supported: ${file.name}`);
+        toast.warning(`File type not supported: ${file.name}`);
         continue;
       }
 
       if (file.size > 10 * 1024 * 1024) { // 10MB limit
-        alert(`File too large: ${file.name}`);
+        toast.warning(`File too large: ${file.name}`);
         continue;
       }
 
@@ -188,7 +216,7 @@ function AppContent() {
       setExternalLink('');
       setLinkModalOpen(false);
     } catch {
-      alert('Please enter a valid URL');
+      toast.error('Please enter a valid URL');
     }
   };
 
@@ -200,7 +228,7 @@ function AppContent() {
     
     // Check if we have any generated code
     if (!htmlFile?.content && !cssFile?.content && !livePreviewCode) {
-      alert('No code to download! Generate some code first.');
+      toast.warning('No code to download! Generate some code first.');
       return;
     }
     
@@ -256,9 +284,10 @@ ${project?.files?.map(f => `- ${f.name}`).join('\n') || '- index.html'}
       saveAs(blob, `${filenameTitle}.zip`);
       
       console.log('📦 Project downloaded:', filenameTitle);
+      toast.success(`Downloaded: ${filenameTitle}.zip`);
     } catch (error) {
       console.error('Download failed:', error);
-      alert('Failed to download project. Please try again.');
+      toast.error('Failed to download project. Please try again.');
     }
   };
 
@@ -275,12 +304,12 @@ ${project?.files?.map(f => `- ${f.name}`).join('\n') || '- index.html'}
   // Handle optimize prompt with Gemini AI
   const handleOptimizePrompt = async () => {
     if (!prompt.trim()) {
-      alert('Please enter a prompt first');
+      toast.warning('Please enter a prompt first');
       return;
     }
     const result = await optimizePromptWithGemini();
     if (!result.success) {
-      alert(result.error || 'Failed to optimize prompt');
+      toast.error(result.error || 'Failed to optimize prompt');
     }
   };
 
@@ -288,7 +317,7 @@ ${project?.files?.map(f => `- ${f.name}`).join('\n') || '- index.html'}
   const handleSendToAI = async () => {
     const result = await generateCodeWithAI();
     if (!result.success) {
-      alert(result.error || 'Failed to generate code');
+      toast.error(result.error || 'Failed to generate code');
     }
   };
 
@@ -407,6 +436,20 @@ ${project?.files?.map(f => `- ${f.name}`).join('\n') || '- index.html'}
               title="Refresh"
             >
               <span className="material-icons-round text-slate-400">refresh</span>
+            </button>
+
+            {/* End Session Button - For Lab Privacy */}
+            <button 
+              onClick={handleEndSession}
+              disabled={isEndingSession}
+              className="p-2 rounded-full hover:bg-red-500/10 transition-colors text-slate-400 hover:text-red-400"
+              title="End Session (For Lab Use)"
+            >
+              {isEndingSession ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <LogOut className="w-5 h-5" />
+              )}
             </button>
           </div>
         </header>
@@ -881,9 +924,12 @@ function App() {
 
   return (
     <CodeProvider>
-      <AppContent />
+      <ToastProvider>
+        <AppContent />
+      </ToastProvider>
     </CodeProvider>
   );
 }
 
 export default App;
+
