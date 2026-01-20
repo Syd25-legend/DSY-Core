@@ -3,6 +3,8 @@ import { openDB } from 'idb';
 import * as sambaNovaService from '../services/sambaNovaService';
 import * as geminiService from '../services/geminiService';
 import * as chatbotService from '../services/chatbotService';
+import { generateCode as routerGenerateCode, parseReactOutput } from '../services/codeGeneratorRouter';
+import * as sessionService from '../services/sessionService';
 
 const CodeContext = createContext(null);
 
@@ -111,7 +113,9 @@ export function CodeProvider({ children }) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedCode, setGeneratedCode] = useState({ html: '', css: '' });
   const [livePreviewCode, setLivePreviewCode] = useState('');
+  const [framework, setFramework] = useState('html'); // 'html' or 'react'
   const [streamingContent, setStreamingContent] = useState('');
+  const [projectTitle, setProjectTitle] = useState(''); // AI-generated project title
 
   // Chat history state
   const [chatHistory, setChatHistory] = useState([]);
@@ -530,7 +534,7 @@ export function CodeProvider({ children }) {
     }
   }, [prompt, assets]);
 
-  // Generate code with AI - Uses Gemini with images+JSON for accurate replication
+  // Generate code with AI - Uses smart router (SambaNova for text, Gemini for images)
   const generateCodeWithAI = useCallback(async () => {
     const promptToUse = optimizedPrompt || prompt;
     
@@ -538,16 +542,10 @@ export function CodeProvider({ children }) {
       return { success: false, error: 'No prompt available' };
     }
 
-    // Check if Gemini is configured (primary service now with key rotation)
-    if (!geminiService.isGeminiConfigured()) {
-      // Fallback to SambaNova if no Gemini keys
-      if (!sambaNovaService.isSambaNovaConfigured()) {
-        return { success: false, error: 'No AI keys configured. Please add VITE_GEMINI_API_KEYS to your .env file.' };
-      }
+    // Check if at least one AI service is configured
+    if (!geminiService.isGeminiConfigured() && !sambaNovaService.isSambaNovaConfigured()) {
+      return { success: false, error: 'No AI keys configured. Please add API keys to your .env file.' };
     }
-
-    const hasImageAssets = geminiService.hasImages(assets);
-    const useGemini = geminiService.isGeminiConfigured();
 
     setIsGenerating(true);
     setStreamingContent('');
@@ -556,76 +554,115 @@ export function CodeProvider({ children }) {
     setAiError(null);
 
     try {
-      let result;
-      
-      if (useGemini) {
-        // Use Gemini with images and JSON for accurate replication
-        console.log('🎨 Using Gemini for code generation');
-        console.log('📷 Images attached:', hasImageAssets);
-        console.log('📋 Design JSON available:', !!designJSON);
-        result = await geminiService.generateWebPageWithImages(promptToUse, assets, designJSON);
-      } else {
-        // Fallback to SambaNova for text-based generation
-        console.log('⚡ Using SambaNova for code generation (fallback)');
-        result = await sambaNovaService.generateWebPage(promptToUse);
-      }
+      // Use the smart router - it selects SambaNova or Gemini based on input
+      console.log('🚀 Generating code with framework:', framework);
+      const result = await routerGenerateCode(promptToUse, assets, framework);
 
-      // Debug logging
       console.log('📦 Code generation result:', result);
-      console.log('📄 HTML length:', result.html?.length || 0);
-      console.log('🎨 CSS length:', result.css?.length || 0);
-      console.log('📝 Raw content preview:', result.rawContent?.substring(0, 500));
+      console.log('🔀 Pipeline used:', result.pipeline);
+      console.log('📐 Framework:', result.framework);
 
       if (result.success) {
-        setGeneratedCode({ html: result.html, css: result.css });
-        
-        // Compile for live preview - use the appropriate service's compiler
-        const compiled = useGemini 
-          ? geminiService.compileLivePreview(result.html, result.css)
-          : sambaNovaService.compileLivePreview(result.html, result.css);
-        setLivePreviewCode(compiled);
-
-        // Update project files - check if files already exist
-        const existingHtmlFile = project.files.find(f => f.name === 'index.html');
-        const existingCssFile = project.files.find(f => f.name === 'styles.css');
-
-        let htmlFileId = existingHtmlFile?.id || null;
-        let cssFileId = existingCssFile?.id || null;
-
-        if (result.html) {
-          if (existingHtmlFile) {
-            updateFileContent(existingHtmlFile.id, result.html);
-          } else {
-            htmlFileId = addNewFile('/', 'index.html', result.html);
+        // Handle React output (multi-file)
+        if (framework === 'react' && result.files && result.files.length > 0) {
+          console.log('⚛️ React files generated:', result.files.length);
+          
+          // Clear existing project files and add React files
+          const newFiles = result.files.map((file, index) => {
+            const id = addNewFile('/', file.name, file.content);
+            return { id, name: file.name, content: file.content, language: file.language };
+          });
+          
+          // Open all files
+          const fileIds = newFiles.map(f => f.id);
+          setOpenFiles(fileIds);
+          
+          // Set App.tsx as active
+          const appFile = newFiles.find(f => f.name === 'App.tsx' || f.name.includes('App'));
+          if (appFile) {
+            setActiveFileId(appFile.id);
+          } else if (fileIds.length > 0) {
+            setActiveFileId(fileIds[0]);
           }
-        }
-        if (result.css) {
-          if (existingCssFile) {
-            updateFileContent(existingCssFile.id, result.css);
-          } else {
-            cssFileId = addNewFile('/', 'styles.css', result.css);
-          }
-        }
+          
+          // For React, we can't show live preview directly (would need bundler)
+          // Show a message or the main component code
+          setLivePreviewCode('<!-- React components generated. Check Code tab for files. -->');
+          
+          // Store generated code
+          setGeneratedCode({ 
+            html: '', 
+            css: '', 
+            files: result.files,
+            framework: 'react' 
+          });
+          
+        } else {
+          // Handle HTML/CSS output
+          setGeneratedCode({ html: result.html, css: result.css });
+          
+          // Compile for live preview
+          const compiled = geminiService.compileLivePreview(result.html, result.css);
+          setLivePreviewCode(compiled);
 
-        // Open BOTH files as separate tabs in a single state update
-        setOpenFiles(prev => {
-          const newOpenFiles = [...prev];
-          if (htmlFileId && !newOpenFiles.includes(htmlFileId)) {
-            newOpenFiles.push(htmlFileId);
+          // Update project files - check if files already exist
+          const existingHtmlFile = project.files.find(f => f.name === 'index.html');
+          const existingCssFile = project.files.find(f => f.name === 'styles.css');
+
+          let htmlFileId = existingHtmlFile?.id || null;
+          let cssFileId = existingCssFile?.id || null;
+
+          if (result.html) {
+            if (existingHtmlFile) {
+              updateFileContent(existingHtmlFile.id, result.html);
+            } else {
+              htmlFileId = addNewFile('/', 'index.html', result.html);
+            }
           }
-          if (cssFileId && !newOpenFiles.includes(cssFileId)) {
-            newOpenFiles.push(cssFileId);
+          if (result.css) {
+            if (existingCssFile) {
+              updateFileContent(existingCssFile.id, result.css);
+            } else {
+              cssFileId = addNewFile('/', 'styles.css', result.css);
+            }
           }
-          return newOpenFiles;
-        });
-        
-        // Set HTML as the active file (CSS tab will also be open but not focused)
-        if (htmlFileId) {
-          setActiveFileId(htmlFileId);
+
+          // Open BOTH files as separate tabs
+          setOpenFiles(prev => {
+            const newOpenFiles = [...prev];
+            if (htmlFileId && !newOpenFiles.includes(htmlFileId)) {
+              newOpenFiles.push(htmlFileId);
+            }
+            if (cssFileId && !newOpenFiles.includes(cssFileId)) {
+              newOpenFiles.push(cssFileId);
+            }
+            return newOpenFiles;
+          });
+          
+          // Set HTML as the active file
+          if (htmlFileId) {
+            setActiveFileId(htmlFileId);
+          }
         }
 
         // Auto-switch to Canvas view
         setActiveTab('canvas');
+
+        // Generate AI-powered project title
+        const promptForTitle = prompt || optimizedPrompt || '';
+        try {
+          const titleResult = await geminiService.generateProjectTitle(promptForTitle);
+          if (titleResult.success && titleResult.title) {
+            setProjectTitle(titleResult.title);
+            console.log('🏷️ Project title generated:', titleResult.title);
+          } else {
+            // Fallback to chat title generation
+            setProjectTitle(generateChatTitle(promptForTitle));
+          }
+        } catch (titleError) {
+          console.warn('Title generation failed, using fallback:', titleError);
+          setProjectTitle(generateChatTitle(promptForTitle));
+        }
 
         // Auto-save to chat history
         if (db) {
@@ -635,7 +672,10 @@ export function CodeProvider({ children }) {
             prompt: prompt || '',
             optimizedPrompt: optimizedPrompt || '',
             assets: assets || [],
-            generatedCode: { html: result.html, css: result.css },
+            generatedCode: framework === 'react' 
+              ? { files: result.files, framework: 'react' }
+              : { html: result.html, css: result.css },
+            framework: framework,
             createdAt: new Date().toISOString(),
           };
           
@@ -657,7 +697,7 @@ export function CodeProvider({ children }) {
     } finally {
       setIsGenerating(false);
     }
-  }, [optimizedPrompt, prompt, assets, designJSON, project.files, openFiles, addNewFile, updateFileContent, openFile]);
+  }, [optimizedPrompt, prompt, assets, designJSON, framework, project.files, addNewFile, updateFileContent, db]);
 
   // Reset generation state
   const resetGeneration = useCallback(() => {
@@ -780,6 +820,110 @@ export function CodeProvider({ children }) {
       return false;
     }
   }, [db, currentChatId]);
+
+  // Sync current session to cloud
+  const syncToCloud = useCallback(async () => {
+    if (!sessionId) return { success: false, error: 'No session ID' };
+    
+    try {
+      // Prepare full session object
+      const sessionData = {
+        project,
+        assets,
+        chatHistory,
+        lastActive: new Date().toISOString(),
+      };
+      
+      await sessionService.syncSessionToCloud(sessionId, sessionData);
+      console.log('☁️ Session synced to cloud:', sessionId);
+      return { success: true };
+    } catch (error) {
+      console.error('Cloud Sync Failed:', error);
+      return { success: false, error: error.message };
+    }
+  }, [sessionId, project, assets, chatHistory]);
+
+  // Switch to a remote session (Login)
+  const switchSession = useCallback(async (targetId) => {
+    if (!db) return { success: false, error: 'Database not initialized' };
+    if (!targetId) return { success: false, error: 'Invalid ID' };
+    
+    setIsLoading(true);
+    
+    try {
+      // 1. Fetch remote session data
+      const remoteSession = await sessionService.retrieveSessionFromCloud(targetId);
+      
+      if (!remoteSession) {
+        throw new Error('Session not found');
+      }
+      
+      console.log('📥 Retrieved remote session:', remoteSession);
+      
+      // 2. Kill current session (Clear IndexedDB stores)
+      const stores = ['assets', 'projects', 'chats', 'appState'];
+      const tx = db.transaction(stores, 'readwrite');
+      
+      await Promise.all([
+        tx.objectStore('assets').clear(),
+        tx.objectStore('projects').clear(),
+        tx.objectStore('chats').clear(),
+        tx.objectStore('appState').clear()
+      ]);
+      
+      // 3. Hydrate IndexedDB with new data
+      // Restore Projects
+      if (remoteSession.project) {
+        await await db.put('projects', remoteSession.project);
+      } else {
+        await db.put('projects', DEFAULT_PROJECT);
+      }
+      
+      // Restore Assets
+      if (remoteSession.assets && Array.isArray(remoteSession.assets)) {
+        for (const asset of remoteSession.assets) {
+          await db.put('assets', asset);
+        }
+      }
+      
+      // Restore Chats
+      if (remoteSession.chatHistory && Array.isArray(remoteSession.chatHistory)) {
+        for (const chat of remoteSession.chatHistory) {
+          await db.put('chats', chat);
+        }
+      }
+      
+      // Set new Session ID
+      await db.put('appState', { key: 'sessionId', value: targetId });
+      
+      await tx.done;
+      
+      // 4. Update React State
+      setSessionId(targetId);
+      setProject(remoteSession.project || DEFAULT_PROJECT);
+      setAssets(remoteSession.assets || []);
+      setChatHistory(remoteSession.chatHistory || []);
+      setOpenFiles([]); // Reset open files
+      setActiveFileId(null);
+      
+      // If code was in the project, maybe load it? 
+      // For now, reset generation state
+      setCode('');
+      setGeneratedCode({ html: '', css: '' });
+      setLivePreviewCode('');
+      
+      console.log('✅ Switched to session:', targetId);
+      return { success: true };
+      
+    } catch (error) {
+      console.error('Failed to switch session:', error);
+      return { success: false, error: error.message };
+    } finally {
+      setIsLoading(false);
+    }
+  }, [db]);
+
+
 
   // Start a new chat (clear current state)
   const startNewChat = useCallback(() => {
@@ -981,15 +1125,20 @@ export function CodeProvider({ children }) {
     generatedCode,
     livePreviewCode,
     streamingContent,
+    framework,
+    setFramework,
     optimizePromptWithGemini,
     generateCodeWithAI,
     resetGeneration,
+    projectTitle, // AI-generated project title for downloads
 
     // Actions
     addAsset,
     removeAsset,
     clearAssets,
     copySessionId,
+    syncToCloud,
+    switchSession,
 
     // Chat history state and actions
     chatHistory,

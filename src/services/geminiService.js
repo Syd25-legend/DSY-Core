@@ -890,5 +890,84 @@ export function compileLivePreview(html, css) {
 </html>`;
 }
 
+/**
+ * Generate a concise project title (3-4 words) using AI
+ * @param {string} prompt - The user's prompt or optimized prompt
+ * @returns {Promise<Object>} { success: boolean, title: string }
+ */
+export async function generateProjectTitle(prompt) {
+  const apiKey = getRandomKey();
+  if (!apiKey) {
+    return { success: false, error: 'No API key available', title: '' };
+  }
+
+  if (!prompt || prompt.trim().length < 3) {
+    return { success: false, error: 'No prompt provided', title: '' };
+  }
+
+  try {
+    const response = await fetch(`${GEMINI_API_URL}:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: `Generate a SHORT, catchy project title (exactly 3-4 words) for this web design project. The title should be:
+- Professional and descriptive
+- No special characters or underscores
+- Use Title Case (capitalize each word)
+- No quotes around the title
+
+Project description: "${prompt.substring(0, 500)}"
+
+Reply with ONLY the title, nothing else. Example good titles:
+- Modern Portfolio Design
+- SaaS Landing Page
+- Dark Dashboard UI
+- Minimal Blog Theme`
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 20,
+        }
+      })
+    });
+
+    if (!response.ok) {
+      return { success: false, error: 'API request failed', title: '' };
+    }
+
+    const data = await response.json();
+    let title = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    
+    // Clean up the title
+    title = title
+      .trim()
+      .replace(/["\n\r]/g, '') // Remove quotes and newlines
+      .replace(/[^a-zA-Z0-9\s]/g, '') // Remove special chars except spaces
+      .replace(/\s+/g, ' ') // Normalize spaces
+      .trim();
+    
+    // Validate title length (should be 2-5 words)
+    const words = title.split(' ').filter(w => w.length > 0);
+    if (words.length < 2 || words.length > 6) {
+      // Truncate or pad to reasonable length
+      title = words.slice(0, 4).join(' ');
+    }
+    
+    if (title.length > 0) {
+      console.log('🏷️ AI generated title:', title);
+      return { success: true, title };
+    }
+    
+    return { success: false, error: 'Empty title generated', title: '' };
+  } catch (error) {
+    console.error('Title generation error:', error);
+    return { success: false, error: error.message, title: '' };
+  }
+}
+
 // Export system prompts for reference
 export const PROMPTS = SYSTEM_PROMPTS;
+

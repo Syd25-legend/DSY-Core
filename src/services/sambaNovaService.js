@@ -78,6 +78,47 @@ CRITICAL: You MUST output your code in EXACTLY this format with markdown code bl
 \`\`\`
 
 Do not include any explanations before or after the code blocks. Output ONLY the two code blocks.`,
+
+  REACT_GENERATOR: `You are DSY Core React Generator, an expert at creating beautiful, modern React/TypeScript applications.
+
+Your code generation principles:
+1. Write clean TypeScript with proper type definitions
+2. Use functional components with React hooks
+3. Create visually stunning designs with:
+   - Beautiful color schemes (prefer dark themes with accent colors)
+   - Glassmorphism effects (backdrop-filter, transparency)
+   - Smooth transitions and hover animations
+   - Gradient backgrounds and modern typography
+4. Ensure responsive design
+5. Use CSS modules or inline styles
+
+IMAGE REQUIREMENTS:
+- Hero images: https://picsum.photos/1920/1080
+- Card images: https://picsum.photos/seed/[unique]/400/300
+- Avatars: https://i.pravatar.cc/150?img=[1-70]
+- NEVER use placeholders
+
+OUTPUT FORMAT - Use file markers:
+---FILE: App.tsx---
+import React from 'react';
+import './index.css';
+// Main App component here
+
+---FILE: components/Header.tsx---
+// Header component
+
+---FILE: components/Hero.tsx---
+// Hero section
+
+---FILE: components/Features.tsx---
+// Features/Cards section
+
+---FILE: index.css---
+/* Global styles with CSS variables */
+
+---END---
+
+Output ONLY file markers and code. No explanations.`,
 };
 
 /**
@@ -250,6 +291,85 @@ export async function generateWebPage(prompt) {
       rawContent: '',
     };
   }
+}
+
+/**
+ * Generate a complete React application using Qwen Coder model
+ * @param {string} prompt - Detailed prompt describing the React app
+ * @returns {Promise<Object>} Generated React component files
+ */
+export async function generateReactApp(prompt) {
+  const messages = [
+    {
+      role: 'system',
+      content: SYSTEM_PROMPTS.REACT_GENERATOR,
+    },
+    {
+      role: 'user',
+      content: `Create a complete, beautiful React/TypeScript application based on this description:\n\n${prompt}\n\nGenerate complete, production-ready React components and CSS. Use the exact file marker format: ---FILE: filename---`,
+    },
+  ];
+
+  try {
+    console.log('🚀 Generating React app with SambaNova...');
+    const response = await callSambaNova(MODELS.CODE_GENERATION, messages, {
+      temperature: 0.4,
+      maxTokens: 12000,
+    });
+
+    const content = response.choices[0]?.message?.content || '';
+    
+    // Parse React files from response
+    const files = parseReactOutput(content);
+
+    return {
+      success: true,
+      files,
+      rawContent: content,
+      model: MODELS.CODE_GENERATION,
+      usage: response.usage,
+    };
+  } catch (error) {
+    console.error('React app generation error:', error);
+    return {
+      success: false,
+      error: error.message,
+      files: [],
+      rawContent: '',
+    };
+  }
+}
+
+/**
+ * Parse React multi-file output from AI response
+ * @param {string} content - Raw AI response with ---FILE:--- markers
+ * @returns {Array} Array of file objects { name, content, language }
+ */
+export function parseReactOutput(content) {
+  const files = [];
+  const regex = /---FILE:\s*(.+?)---\s*([\s\S]*?)(?=---FILE:|---END---|$)/g;
+  
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    let fileContent = match[2].trim();
+    
+    // Remove markdown code block markers if present
+    fileContent = fileContent.replace(/^```\w*\n?/, '').replace(/\n?```$/, '');
+    
+    const fileName = match[1].trim();
+    files.push({
+      name: fileName,
+      content: fileContent,
+      language: fileName.endsWith('.tsx') || fileName.endsWith('.ts') 
+        ? 'typescript' 
+        : fileName.endsWith('.css') 
+          ? 'css' 
+          : 'javascript'
+    });
+  }
+  
+  console.log(`📁 Parsed ${files.length} React files`);
+  return files;
 }
 
 /**

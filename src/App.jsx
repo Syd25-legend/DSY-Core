@@ -9,7 +9,11 @@ import LivePreview from './components/LivePreview';
 import ChatHistoryDrawer from './components/ChatHistoryDrawer';
 import PreviewPage from './components/PreviewPage';
 import CodeChatbot from './components/CodeChatbot';
-import { Map, Box } from 'lucide-react';
+import LoginModal from './components/LoginModal';
+import { Map, Box, LogIn, CloudUpload, Loader2 } from 'lucide-react';
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
+import { generateProjectTitle, sanitizeFilename } from './utils/titleGenerator';
 import './index.css';
 
 function AppContent() {
@@ -31,16 +35,26 @@ function AppContent() {
     isGenerating,
     livePreviewCode,
     aiError,
+    framework,
+    setFramework,
     optimizePromptWithGemini,
     generateCodeWithAI,
     resetGeneration,
     // Chat history
     chatHistory,
     toggleHistoryDrawer,
+    // Session Sync
+    syncToCloud,
+    // Project files
+    project,
+    // AI-generated project title
+    projectTitle,
   } = useCode();
 
   const [copied, setCopied] = useState(false);
   const [linkModalOpen, setLinkModalOpen] = useState(false);
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [externalLink, setExternalLink] = useState('');
   const [examplePromptsOpen, setExamplePromptsOpen] = useState(false);
   const [isHoveringUploadZone, setIsHoveringUploadZone] = useState(false);
@@ -67,6 +81,19 @@ function AppContent() {
     if (success) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  // Handle Cloud Sync
+  const handleSync = async () => {
+    setIsSyncing(true);
+    const result = await syncToCloud();
+    setIsSyncing(false);
+    
+    if (result.success) {
+      alert('Session synced to cloud successfully!');
+    } else {
+      alert('Failed to sync: ' + result.error);
     }
   };
 
@@ -167,8 +194,72 @@ function AppContent() {
 
   // Handle project download
   const handleDownload = async () => {
-    // This would generate and download the project
-    alert('Download feature coming soon!');
+    // Get files from current context
+    const htmlFile = project?.files?.find(f => f.name === 'index.html');
+    const cssFile = project?.files?.find(f => f.name === 'styles.css');
+    
+    // Check if we have any generated code
+    if (!htmlFile?.content && !cssFile?.content && !livePreviewCode) {
+      alert('No code to download! Generate some code first.');
+      return;
+    }
+    
+    try {
+      const zip = new JSZip();
+      
+      // Use AI-generated title or fallback to prompt-based title
+      const downloadTitle = projectTitle || generateProjectTitle(optimizedPrompt || prompt || 'DSY Project');
+      // Sanitize for filename (replace spaces with underscores for file, but display with spaces)
+      const filenameTitle = sanitizeFilename(downloadTitle.replace(/\s+/g, ' ').trim()) || 'DSY Project';
+      
+      // Add HTML file
+      if (htmlFile?.content) {
+        zip.file('index.html', htmlFile.content);
+      } else if (livePreviewCode) {
+        // Extract HTML from live preview if no separate file exists
+        zip.file('index.html', livePreviewCode);
+      }
+      
+      // Add CSS file
+      if (cssFile?.content) {
+        zip.file('styles.css', cssFile.content);
+      }
+      
+      // Add any other project files
+      if (project?.files) {
+        for (const file of project.files) {
+          if (file.name !== 'index.html' && file.name !== 'styles.css' && file.content) {
+            zip.file(file.name, file.content);
+          }
+        }
+      }
+      
+      // Add a README with project info
+      const readme = `# ${downloadTitle}
+
+Generated with DSY Core
+Session ID: ${sessionId}
+Generated on: ${new Date().toLocaleString()}
+
+## Files included:
+${project?.files?.map(f => `- ${f.name}`).join('\n') || '- index.html'}
+
+## How to use:
+1. Open index.html in your browser
+2. Edit files as needed
+3. Enjoy your design!
+`;
+      zip.file('README.md', readme);
+      
+      // Generate and download the zip
+      const blob = await zip.generateAsync({ type: 'blob' });
+      saveAs(blob, `${filenameTitle}.zip`);
+      
+      console.log('📦 Project downloaded:', filenameTitle);
+    } catch (error) {
+      console.error('Download failed:', error);
+      alert('Failed to download project. Please try again.');
+    }
   };
 
   // Handle keyboard shortcuts on textarea
@@ -272,6 +363,29 @@ function AppContent() {
               </button>
             </div>
             
+            {/* Sync Button */}
+            <button 
+              onClick={handleSync}
+              disabled={isSyncing}
+              className="p-2 rounded-full hover:bg-white/5 transition-colors text-slate-400 hover:text-[#C5A059]"
+              title="Sync to Cloud"
+            >
+              {isSyncing ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <CloudUpload className="w-5 h-5" />
+              )}
+            </button>
+
+            {/* Login / Retrieve Button */}
+            <button 
+              onClick={() => setLoginModalOpen(true)}
+              className="p-2 rounded-full hover:bg-white/5 transition-colors text-slate-400 hover:text-purple-400"
+              title="Retrieve Session (Login)"
+            >
+              <LogIn className="w-5 h-5" />
+            </button>
+
             {/* History Button */}
             <button 
               onClick={toggleHistoryDrawer}
@@ -388,6 +502,27 @@ function AppContent() {
                             <div className="p-4 text-sm text-slate-300 leading-relaxed max-h-40 overflow-y-auto">
                               {optimizedPrompt}
                             </div>
+                          </div>
+                        </div>
+                        
+                        {/* Framework Toggle */}
+                        <div className="framework-toggle">
+                          <span className="toggle-label">Output Format:</span>
+                          <div className="toggle-buttons">
+                            <button 
+                              className={`toggle-btn ${framework === 'html' ? 'active' : ''}`}
+                              onClick={() => setFramework('html')}
+                            >
+                              <span className="material-icons-round text-xs mr-1">code</span>
+                              HTML/CSS
+                            </button>
+                            <button 
+                              className={`toggle-btn ${framework === 'react' ? 'active' : ''}`}
+                              onClick={() => setFramework('react')}
+                            >
+                              <span className="material-icons-round text-xs mr-1">widgets</span>
+                              React
+                            </button>
                           </div>
                         </div>
                         
@@ -715,6 +850,9 @@ function AppContent() {
           </div>
         </div>
       )}
+
+      {/* Login Modal */}
+      <LoginModal isOpen={loginModalOpen} onClose={() => setLoginModalOpen(false)} />
 
       {/* Chat History Drawer */}
       <ChatHistoryDrawer />
